@@ -1,11 +1,15 @@
 package com.jxd;
 
+import co.elastic.clients.elasticsearch.indices.DeleteIndexResponse;
+import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.elasticsearch.action.DocWriteResponse;
+import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest;
+import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
@@ -16,6 +20,7 @@ import org.elasticsearch.action.search.ClearScrollRequest;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchScrollRequest;
+import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.action.update.UpdateResponse;
 import org.elasticsearch.client.RequestOptions;
@@ -34,6 +39,7 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xcontent.XContentType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -73,6 +79,18 @@ public class EsCommonOperation {
 
     public SearchRequest getSearchReqByIndexName(@Nonnull String indexName) {
         return new SearchRequest(indexName);
+    }
+
+    /**
+     * 查看集群状态，类似于 GET /_cluster/health?pretty
+     */
+    public void getClusterHealth() throws IOException {
+        ClusterHealthRequest request = new ClusterHealthRequest();
+
+        ClusterHealthResponse response =
+                restHighLevelClient.cluster().health(request, RequestOptions.DEFAULT);
+
+        System.out.println(JSON.toJSONString(response));
     }
 
     /**
@@ -758,5 +776,18 @@ public class EsCommonOperation {
             closeRestHighLevelClient();
         }
         return 0L;
+    }
+
+    /**
+     * 删除索引，类似: DELETE /products
+     *
+     * @param indexName 要删除的索引的索引名称
+     * @return
+     * @throws IOException
+     */
+    public boolean deleteIndex(String indexName) throws IOException {
+        DeleteIndexRequest request = new DeleteIndexRequest(indexName);
+        AcknowledgedResponse response = restHighLevelClient.indices().delete(request, RequestOptions.DEFAULT);
+        return response.isAcknowledged();
     }
 }

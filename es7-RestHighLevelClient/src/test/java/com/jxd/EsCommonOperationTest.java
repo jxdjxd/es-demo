@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import javax.annotation.Resource;
+import java.io.IOException;
 import java.util.*;
 
 /**
@@ -21,6 +22,11 @@ class EsCommonOperationTest {
     private EsCommonOperation esCommonOperation;
 
     public String indexName = "employee";
+
+    @Test
+    void getClusterHealth() throws IOException {
+        esCommonOperation.getClusterHealth();
+    }
 
     @Test
     void insert() {
