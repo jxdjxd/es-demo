@@ -1,7 +1,6 @@
 package com.jxd;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.sun.istack.internal.NotNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
@@ -36,12 +35,12 @@ import org.elasticsearch.xcontent.XContentType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.*;
 
 /**
- *
  * @author jxd
  * {@code @date} 2024/12/25 23:09
  */
@@ -72,7 +71,7 @@ public class EsCommonOperation {
         }
     }
 
-    public SearchRequest getSearchReqByIndexName(@NotNull String indexName) {
+    public SearchRequest getSearchReqByIndexName(@Nonnull String indexName) {
         return new SearchRequest(indexName);
     }
 
