@@ -1,0 +1,17 @@
+server:
+  port: 8080
+spring:
+  jackson:
+    # 将 date 序列化为时间字符串的格式
+    date-format: yyyy-MM-dd HH:mm:ss
+    # 序列化 date 采用的时区
+    time-zone: Asia/Shanghai
+    serialization:
+      # 是否将 Java date 类型序列化为时间戳
+      write-dates-as-timestamps: false
+  elasticsearch:
+    uris: http://node78:9200
+    connection-timeout: 30000
+    socket-timeout: 30000
+    username: elastic
+    password: 123456
