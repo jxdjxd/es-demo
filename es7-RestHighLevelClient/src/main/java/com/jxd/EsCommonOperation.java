@@ -1,6 +1,5 @@
 package com.jxd;
 
-import co.elastic.clients.elasticsearch.indices.DeleteIndexResponse;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +9,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.elasticsearch.action.DocWriteResponse;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthResponse;
+import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest;
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
@@ -34,12 +34,16 @@ import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.Aggregations;
+import org.elasticsearch.search.aggregations.BucketOrder;
+import org.elasticsearch.search.aggregations.bucket.terms.Terms;
+import org.elasticsearch.search.aggregations.metrics.Avg;
 import org.elasticsearch.search.aggregations.metrics.Cardinality;
+import org.elasticsearch.search.aggregations.metrics.Max;
+import org.elasticsearch.search.aggregations.metrics.Min;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xcontent.XContentType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -201,7 +205,7 @@ public class EsCommonOperation {
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder().size(batchSearchPageSize);
             final BoolQueryBuilder[] boolQuery = {QueryBuilders.boolQuery()};
             if (!MapUtils.isEmpty(params)) {
-                params.forEach((key, value) -> boolQuery[0] = boolQuery[0].must(QueryBuilders.termQuery(key, value)));
+                params.forEach((key, value) -> boolQuery[0] = boolQuery[0].must(QueryBuilders.matchQuery(key, value)));
             }
             if (Objects.nonNull(fetchSources) && fetchSources.length > 0) {
                 sourceBuilder.fetchSource(fetchSources, null);
@@ -384,6 +388,115 @@ public class EsCommonOperation {
             closeRestHighLevelClient();
         }
         return allHits;
+    }
+
+
+    /**
+     * 聚合查询
+     * <p>
+     * GET /employee/_search
+     * {
+     * "size": 0,
+     * "aggs": {
+     * "by_job": {
+     * "terms": {
+     * "field": "job",
+     * "size": 20,
+     * "order": { "avg_salary": "desc" }
+     * },
+     * "aggs": {
+     * "avg_salary": { "avg": { "field": "salary" } },
+     * "max_salary": { "max": { "field": "salary" } },
+     * "min_salary": { "min": { "field": "salary" } },
+     * "by_sex": {
+     * "terms": { "field": "sex", "size": 10 }
+     * }
+     * }
+     * }
+     * }
+     * }
+     * <p>
+     * 类比于（按照 sex 再次做子聚合表达不了）：
+     * SELECT
+     * job,
+     * COUNT(*)              AS doc_count,
+     * AVG(salary)           AS avg_salary,
+     * MAX(salary)           AS max_salary,
+     * MIN(salary)           AS min_salary
+     * FROM employee
+     * GROUP BY job
+     * ORDER BY avg_salary DESC
+     * -- 对应 terms 的 size: 20
+     * LIMIT 20;
+     *
+     * @throws Exception
+     */
+    public void aggregateByJob() throws Exception {
+        // 1. 构建查询请求
+        SearchRequest searchRequest = new SearchRequest("employee");
+        SearchSourceBuilder sourceBuilder = new SearchSourceBuilder();
+        // 只取聚合结果，不返回文档
+        sourceBuilder.size(0);
+
+        // 2. 按 job 分组（terms 聚合）
+        // size(20) 表示最多返回 20 个职位分组
+        sourceBuilder.aggregation(
+                AggregationBuilders
+                        // terms 聚合（aggregation），分组统计
+                        .terms("by_job")
+                        .field("job")
+                        .size(20)
+                        // 按平均薪资降序排序
+                        .order(BucketOrder.aggregation("avg_salary", false))
+                        // 子聚合：平均薪资
+                        .subAggregation(
+                                AggregationBuilders.avg("avg_salary").field("salary"))
+                        // 子聚合：最高薪资
+                        .subAggregation(
+                                AggregationBuilders.max("max_salary").field("salary"))
+                        // 子聚合：最低薪资
+                        .subAggregation(
+                                AggregationBuilders.min("min_salary").field("salary"))
+                        // 子聚合：按性别再分组统计人数
+                        .subAggregation(
+                                AggregationBuilders.terms("by_sex").field("sex").size(10))
+        );
+
+        searchRequest.source(sourceBuilder);
+
+        // 3. 执行查询
+        SearchResponse response = restHighLevelClient.search(searchRequest, RequestOptions.DEFAULT);
+
+        // 4. 解析结果
+        Terms byJob = response.getAggregations().get("by_job");
+
+        System.out.println("总职位数: " + byJob.getBuckets().size());
+        System.out.println("----------------------------------------");
+
+        for (Terms.Bucket jobBucket : byJob.getBuckets()) {
+            String job = jobBucket.getKeyAsString();
+            long count = jobBucket.getDocCount();
+
+            Avg avgSalary = jobBucket.getAggregations().get("avg_salary");
+            Max maxSalary = jobBucket.getAggregations().get("max_salary");
+            Min minSalary = jobBucket.getAggregations().get("min_salary");
+
+            System.out.printf("职位: %s%n", job);
+            System.out.printf("  人数: %d%n", count);
+            System.out.printf("  平均薪资: %.2f%n", avgSalary.getValue());
+            System.out.printf("  最高薪资: %.0f%n", maxSalary.getValue());
+            System.out.printf("  最低薪资: %.0f%n", minSalary.getValue());
+
+            // 性别子聚合
+            Terms bySex = jobBucket.getAggregations().get("by_sex");
+            System.out.print("  性别分布: ");
+            for (Terms.Bucket sexBucket : bySex.getBuckets()) {
+                // sex: 0-女, 1-男（按你的业务定义）
+                System.out.printf("[sex=%s: %d人] ",
+                        sexBucket.getKeyAsString(), sexBucket.getDocCount());
+            }
+            System.out.println("\n----------------------------------------");
+        }
     }
 
     /**

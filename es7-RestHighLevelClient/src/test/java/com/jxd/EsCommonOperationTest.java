@@ -83,9 +83,10 @@ class EsCommonOperationTest {
     @Test
     void queryByParams() {
         Map<String, Object> params = new HashMap<>();
-        params.put("name", "天");
-        params.put("job", "Python");
+        params.put("job", "测试");
+        params.put("remark", "自动化");
 
+        // 全文检索
         final List<SearchHit> searchHits = esCommonOperation.queryByParams(indexName, params, null);
         for (SearchHit hit : searchHits) {
             String json = hit.getSourceAsString();
@@ -96,8 +97,8 @@ class EsCommonOperationTest {
     @Test
     void queryByParamsAndMustExistFields_normal_case() {
         Map<String, Object> params = new HashMap<>();
-        params.put("name", "白");
-        params.put("job", "Python");
+        params.put("name", "小可爱");
+        params.put("english_name", "xiaokeai");
         // 必须有 salary 字段
         List<String> mustExistFields = Collections.singletonList("salary");
         final List<SearchHit> searchHits = esCommonOperation.queryByParamsAndMustExistFields(indexName, params, null,
@@ -113,7 +114,7 @@ class EsCommonOperationTest {
         Map<String, List<Object>> inListTermsParams = new HashMap<>();
         final List<Object> englishNames = new ArrayList<>();
         englishNames.add("xiaokeai");
-        englishNames.add("xiaomi");
+        englishNames.add("wangshier");
         inListTermsParams.put("english_name", englishNames);
 
         final List<SearchHit> searchHits = esCommonOperation.queryByTermParams(indexName, null, inListTermsParams,
@@ -138,7 +139,8 @@ class EsCommonOperationTest {
     @Test
     void queryBySourceBuilder() {
         SearchSourceBuilder sourceBuilder = new SearchSourceBuilder();
-        final BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery().must(QueryBuilders.termQuery("job",
+        // job 的类型是 text + keyword，会分词，存入的 Scala 会因为分词变成 scala
+        final BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery().must(QueryBuilders.termQuery("job.keyword",
                 "Scala"));
         sourceBuilder.query(boolQueryBuilder);
         final List<SearchHit> searchHits = esCommonOperation.queryBySourceBuilder(indexName, sourceBuilder);
@@ -214,6 +216,11 @@ class EsCommonOperationTest {
                 esCommonOperation.getUniqueItemNm(indexName, "job_day", "2024-12-10 08:30:00", "2024-12-11 09:30:00",
                         "job", null, null)
         );
+    }
+
+    @Test
+    void aggregateByJob() throws Exception {
+        esCommonOperation.aggregateByJob();
     }
 }
 

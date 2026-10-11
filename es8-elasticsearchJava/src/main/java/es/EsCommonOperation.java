@@ -1,13 +1,17 @@
 package es;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.Result;
+import co.elastic.clients.elasticsearch._types.aggregations.CardinalityAggregate;
 import co.elastic.clients.elasticsearch._types.query_dsl.*;
 import co.elastic.clients.elasticsearch.core.*;
+import co.elastic.clients.elasticsearch.core.bulk.BulkOperation;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import co.elastic.clients.elasticsearch.core.bulk.DeleteOperation;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.elasticsearch.core.search.HitsMetadata;
 import co.elastic.clients.elasticsearch.core.search.SourceConfig;
 import co.elastic.clients.elasticsearch.core.search.SourceFilter;
 import co.elastic.clients.json.JsonData;
@@ -15,6 +19,8 @@ import com.alibaba.fastjson2.JSONObject;
 import com.fasterxml.jackson.databind.JsonNode;
 import es.bean.QueryFilter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -585,5 +591,173 @@ public class EsCommonOperation {
         }
 
         return batchDelete(indexName, allResults);
+    }
+
+    /**
+     * 根据 id 列表批量删除 es 中的记录
+     *
+     * @param indexName 索引名
+     * @param ids       id 列表
+     * @return 是否删除成功
+     */
+    public boolean batchDeleteByIds(String indexName, List<String> ids) {
+        if (StringUtils.isBlank(indexName)) {
+            return true;
+        }
+        if (CollectionUtils.isEmpty(ids)) {
+            return true;
+        }
+
+        // 1. 构建批量操作：每个 id 一个 delete 操作
+        List<BulkOperation> operations = ids.stream()
+                .map(id -> new BulkOperation.Builder()
+                        .delete(d -> d
+                                .index(indexName)
+                                .id(id))
+                        .build())
+                .collect(Collectors.toList());
+
+        // 2. 构建 BulkRequest
+        BulkRequest bulkRequest = new BulkRequest.Builder()
+                .operations(operations)
+                .build();
+
+        try {
+            // 3. 执行
+            BulkResponse bulkResponse = elasticsearchClient.bulk(bulkRequest);
+
+            // 4. 检查是否有失败
+            if (bulkResponse.errors()) {
+                // 打印失败明细，便于排查
+                List<BulkResponseItem> failedItems = bulkResponse.items().stream()
+                        .filter(item -> item.error() != null)
+                        .toList();
+                for (BulkResponseItem item : failedItems) {
+                    String errorReason = null;
+                    if (!Objects.isNull(item.error())) {
+                        errorReason = item.error().reason();
+                    }
+                    log.error("删除失败 index={}, id={}, error={}",
+                            item.index(), item.id(), errorReason);
+                }
+                return false;
+            }
+            return true;
+
+        } catch (IOException e) {
+            log.error("批量删除 IOException: {}", e.getMessage(), e);
+            return false;
+        } catch (ElasticsearchException e) {
+            // 服务端返回的错误（比如 404、400 等）
+            log.error("批量删除 ElasticsearchException: {}", e.getMessage(), e);
+            return false;
+        }
+        // 注意：新版客户端通常由 Spring 容器管理，不建议在这里 close
+    }
+
+
+    /**
+     * 根据时间筛选访问和其他字段筛选数据,再根据指定的字段去重,返回去重后的数量(uv)
+     *
+     * @param indexName         索引名
+     * @param timeFiled         时间字段名称
+     * @param startTime         开始时间(es 中的时间字符串格式),包含
+     * @param endTime           结束时间(es 中的时间字符串格式),包含
+     * @param distinctFiledName 根据哪个字段去重,如果传入为 null,返回的就是记录数
+     * @param termFilters       其他过滤条件, key 是字段名, value 是过滤值,精确匹配
+     * @param matchFilters      其他过滤条件, key 是字段名, value 是过滤值,全文匹配
+     * @return uv
+     */
+    public long getUniqueItemNm(String indexName,
+                                @Nullable String timeFiled,
+                                @Nullable Object startTime,
+                                @Nullable Object endTime,
+                                String distinctFiledName,
+                                @Nullable Map<String, Object> termFilters,
+                                @Nullable Map<String, Object> matchFilters) {
+
+        if (StringUtils.isBlank(indexName)) {
+            return 0L;
+        }
+
+        // 1. 构建 bool query
+        BoolQuery.Builder boolQueryBuilder = new BoolQuery.Builder();
+
+        // 1.1 时间范围过滤
+        if (StringUtils.isNotBlank(timeFiled)) {
+            if (Objects.nonNull(startTime) || Objects.nonNull(endTime)) {
+                boolQueryBuilder.must(m -> m.range(r -> {
+                    r.field(timeFiled);
+                    if (Objects.nonNull(startTime)) {
+                        r.gte(JsonData.of(startTime));
+                    }
+                    if (Objects.nonNull(endTime)) {
+                        // 原代码：有 start 时用 lte，无 start 时用 lt
+                        if (Objects.nonNull(startTime)) {
+                            r.lte(JsonData.of(endTime));
+                        } else {
+                            r.lt(JsonData.of(endTime));
+                        }
+                    }
+                    return r;
+                }));
+            }
+        }
+
+        // 1.2 term 精确过滤
+        if (MapUtils.isNotEmpty(termFilters)) {
+            termFilters.forEach((k, v) ->
+                    boolQueryBuilder.must(m -> m.term(t -> t
+                            .field(k)
+                            .value(FieldValue.of(v)))));
+        }
+
+        // 1.3 match 全文过滤
+        if (MapUtils.isNotEmpty(matchFilters)) {
+            matchFilters.forEach((k, v) ->
+                    boolQueryBuilder.must(m -> m.match(mt -> mt
+                            .field(k)
+                            .query(FieldValue.of(v)))));
+        }
+
+        // 2. 构建 SearchRequest
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder()
+                .index(indexName)
+                .size(0)
+                .query(boolQueryBuilder.build()._toQuery());
+
+        // 3. 聚合：cardinality 去重计数
+        String aggregationResFieldName = "unique";
+        if (StringUtils.isNotBlank(distinctFiledName)) {
+            searchBuilder.aggregations(aggregationResFieldName, a -> a
+                    .cardinality(c -> c.field(distinctFiledName)));
+        }
+
+        try {
+            // 4. 执行查询
+            SearchResponse<Void> response = elasticsearchClient.search(
+                    searchBuilder.build(), Void.class);
+
+            if (StringUtils.isNotBlank(distinctFiledName)) {
+                // 5. 取 cardinality 结果
+                CardinalityAggregate cardinality = response.aggregations()
+                        .get(aggregationResFieldName)
+                        .cardinality();
+                return cardinality.value();
+            } else {
+                // 6. 取命中总数
+                HitsMetadata<Void> hits = response.hits();
+                if (Objects.isNull(hits) || Objects.isNull(hits.total())) {
+                    return 0L;
+                }
+                return hits.total().value();
+            }
+
+        } catch (IOException e) {
+            log.error("getUniqueItemNm IOException: {}", e.getMessage(), e);
+        } catch (ElasticsearchException e) {
+            log.error("getUniqueItemNm ElasticsearchException: {}", e.getMessage(), e);
+        }
+        return 0L;
     }
 }

@@ -17,6 +17,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -90,7 +91,7 @@ class EsCommonOperationTest {
         termFieldFilters.add(new QueryFilter("job.keyword", "Python"));
 
         final ArrayList<QueryFilter> matchFieldFilters = new ArrayList<>();
-        matchFieldFilters.add(new QueryFilter("name", "天"));
+        matchFieldFilters.add(new QueryFilter("name", "天天"));
 
         System.out.println(
                 esCommonOperation.searchWithFilters(indexName, returnFields, termFieldFilters, matchFieldFilters)
@@ -176,7 +177,8 @@ class EsCommonOperationTest {
     @Test
     void batchDelete_use_query() {
         List<QueryFilter> fieldFilters = new ArrayList<>();
-        fieldFilters.add(new QueryFilter("name", "白"));
+        // remark 的类型是 text + keyword
+        fieldFilters.add(new QueryFilter("remark", "测试"));
 
         final ArrayList<Query> conditions = new ArrayList<>();
         for (QueryFilter filter : fieldFilters) {
@@ -207,5 +209,66 @@ class EsCommonOperationTest {
         needUpdateFieldWithValue.put("name", "小白");
 
         esCommonOperation.updatePartialById(indexName, "2", needUpdateFieldWithValue);
+    }
+
+    @Test
+    void batchDeleteByIds() {
+        List<String> ids = Arrays.asList("3", "5");
+        System.out.println(esCommonOperation.batchDeleteByIds(indexName, ids));
+    }
+
+    /**
+     * 所有参数全部传值：
+     * - 索引：employee
+     * - 时间字段：job_day
+     * - 开始时间：2024-01-01T00:00:00.000Z
+     * - 结束时间：2025-12-31T23:59:59.999Z
+     * - 去重字段：name
+     * - term 过滤：job = "Java"，sex = 1
+     * - match 过滤：remark 包含 "开发"
+     */
+    @Test
+    void testGetUniqueItemNm_AllParams() {
+        // ---------- 1. 准备参数 ---------
+        String timeFiled = "job_day";
+        Object startTime = "2024-01-01 00:00:00";
+        Object endTime = "2025-12-31 23:59:59";
+        String distinctFiledName = "name";
+
+        // term 精确过滤
+        Map<String, Object> termFilters = new HashMap<>();
+        // 注意：sex 是 integer，传 Integer，不要传 "1"
+        termFilters.put("sex", 1);
+
+        // match 全文过滤
+        Map<String, Object> matchFilters = new HashMap<>();
+        matchFilters.put("job", "Java");
+        matchFilters.put("remark", "开发");
+
+        // ---------- 2. 调用 ----------
+        long uv = esCommonOperation.getUniqueItemNm(
+                indexName,
+                timeFiled,
+                startTime,
+                endTime,
+                distinctFiledName,
+                termFilters,
+                matchFilters);
+
+        // ---------- 3. 打印 + 断言 ----------
+        System.out.println("========================================");
+        System.out.println("索引: " + indexName);
+        System.out.println("时间字段: " + timeFiled);
+        System.out.println("时间范围: [" + startTime + " ~ " + endTime + "]");
+        System.out.println("去重字段: " + distinctFiledName);
+        System.out.println("term 过滤: " + termFilters);
+        System.out.println("match 过滤: " + matchFilters);
+        System.out.println("去重结果 (UV): " + uv);
+        System.out.println("========================================");
+
+        // 按我们导入的 20 条数据：
+        // job=Java 且 sex=1 且 job_day 在 2024~2025 且 remark 含"开发"的员工
+        // → 只有 "张三"（job=Java, sex=1, job_day=2025-01-15, remark=资深开发）
+        assertEquals(1L, uv, "应只有 1 个不同的 name");
     }
 }
